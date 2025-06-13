@@ -110,6 +110,102 @@
     </div>
 
     <script>
+        // Initialize the fluid simulation with mobile optimizations
+        window.addEventListener('DOMContentLoaded', () => {
+            const canvas = document.getElementById('fluid');
+            
+            // Ensure canvas is visible and properly sized
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            // Detect if we're on mobile
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+                           ('ontouchstart' in window) || 
+                           (navigator.maxTouchPoints > 0);
+            
+            // Mobile-optimized settings
+            const mobileConfig = {
+                SIM_RESOLUTION: isMobile ? 64 : 128,
+                DYE_RESOLUTION: isMobile ? 512 : 1440,
+                DENSITY_DISSIPATION: 3.5,
+                VELOCITY_DISSIPATION: 2,
+                PRESSURE: 0.1,
+                PRESSURE_ITERATIONS: isMobile ? 10 : 20,
+                CURL: 3,
+                SPLAT_RADIUS: isMobile ? 0.25 : 0.2,
+                SPLAT_FORCE: isMobile ? 8000 : 6000,
+                SHADING: !isMobile, // Disable shading on mobile for better performance
+                COLOR_UPDATE_SPEED: 10,
+                TRANSPARENT: true,
+                CREATE_INITIAL_SPLATS: true
+            };
+            
+            // Initialize the animation
+            SplashCursor(canvas, mobileConfig);
+            
+            // Add touch feedback for mobile
+            if (isMobile) {
+                canvas.style.cursor = 'none';
+                
+                // Prevent zoom on double tap
+                let lastTouchEnd = 0;
+                canvas.addEventListener('touchend', function (event) {
+                    var now = (new Date()).getTime();
+                    if (now - lastTouchEnd <= 300) {
+                        event.preventDefault();
+                    }
+                    lastTouchEnd = now;
+                }, false);
+                
+                // Prevent pinch zoom
+                canvas.addEventListener('gesturestart', function (e) {
+                    e.preventDefault();
+                });
+                
+                canvas.addEventListener('gesturechange', function (e) {
+                    e.preventDefault();
+                });
+                
+                canvas.addEventListener('gestureend', function (e) {
+                    e.preventDefault();
+                });
+            }
+            
+            // Optimize for different pixel densities
+            const pixelRatio = window.devicePixelRatio || 1;
+            if (pixelRatio > 2 && isMobile) {
+                // Reduce resolution on high-DPI mobile devices for better performance
+                mobileConfig.SIM_RESOLUTION = 48;
+                mobileConfig.DYE_RESOLUTION = 256;
+            }
+            
+            // Add performance monitoring
+            let frameCount = 0;
+            let lastTime = performance.now();
+            
+            function checkPerformance() {
+                frameCount++;
+                const currentTime = performance.now();
+                
+                if (currentTime - lastTime >= 5000) { // Check every 5 seconds
+                    const fps = (frameCount * 1000) / (currentTime - lastTime);
+                    
+                    if (fps < 30 && isMobile) {
+                        console.log('Reducing quality for better performance');
+                    }
+                    
+                    frameCount = 0;
+                    lastTime = currentTime;
+                }
+                
+                requestAnimationFrame(checkPerformance);
+            }
+            
+            if (isMobile) {
+                checkPerformance();
+            }
+        });
+
         function SplashCursor(canvas, config = {}) {
             const {
                 SIM_RESOLUTION = 128,
@@ -125,7 +221,8 @@
                 SHADING = true,
                 COLOR_UPDATE_SPEED = 10,
                 BACK_COLOR = { r: 0.5, g: 0, b: 0 },
-                TRANSPARENT = true
+                TRANSPARENT = true,
+                CREATE_INITIAL_SPLATS = true // Added flag for initial splats
             } = config;
 
             if (!canvas) return;
@@ -608,8 +705,6 @@
                 varying vec2 vT;
                 varying vec2 vB;
                 uniform sampler2D uTexture;
-                uniform sampler2D uDithering;
-                uniform vec2 ditherScale;
                 uniform vec2 texelSize;
 
                 vec3 linearToGamma (vec3 color) {
@@ -751,6 +846,20 @@
                 gl.uniform1i(copyProgram.uniforms.uTexture, target.attach(0));
                 blit(newFBO);
                 return newFBO;
+            }
+
+            function getResolution(resolution) {
+                let aspectRatio = gl.drawingBufferWidth / gl.drawingBufferHeight;
+                if (aspectRatio < 1) aspectRatio = 1.0 / aspectRatio;
+
+                let min = Math.round(resolution);
+                let max = Math.round(resolution * aspectRatio);
+
+                if (gl.drawingBufferWidth > gl.drawingBufferHeight) {
+                    return { width: max, height: min };
+                } else {
+                    return { width: min, height: max };
+                }
             }
 
             initDisplayMaterial();
@@ -986,20 +1095,6 @@
                 return { r, g, b };
             }
 
-            function getResolution(resolution) {
-                let aspectRatio = gl.drawingBufferWidth / gl.drawingBufferHeight;
-                if (aspectRatio < 1) aspectRatio = 1.0 / aspectRatio;
-
-                let min = Math.round(resolution);
-                let max = Math.round(resolution * aspectRatio);
-
-                if (gl.drawingBufferWidth > gl.drawingBufferHeight) {
-                    return { width: max, height: min };
-                } else {
-                    return { width: min, height: max };
-                }
-            }
-
             function scaleByPixelRatio(input) {
                 let pixelRatio = window.devicePixelRatio || 1;
                 return Math.floor(input * pixelRatio);
@@ -1031,27 +1126,54 @@
                 );
             }
 
+            // Create some initial splats for visual interest
+            function createInitialSplats() {
+                if (CREATE_INITIAL_SPLATS) {
+                    for (let i = 0; i < 3; i++) {
+                        // Create random positions for the initial splats
+                        let x = Math.random();
+                        let y = Math.random();
+                        let dx = 20 * (Math.random() - 0.5);
+                        let dy = 20 * (Math.random() - 0.5);
+                        let color = generateColor();
+                        color.r *= 10;
+                        color.g *= 10;
+                        color.b *= 10;
+                        splat(x, y, dx, dy, color);
+                    }
+                }
+            }
+
             // Mouse event handlers
             canvas.addEventListener('mousedown', e => {
                 let pointer = pointers[0];
-                updatePointerDownData(pointer, -1, scaleByPixelRatio(e.clientX), scaleByPixelRatio(e.clientY));
+                updatePointerDownData(pointer, -1, scaleByPixelRatio(e.offsetX), scaleByPixelRatio(e.offsetY));
                 triggerSplat(pointer);
             });
 
             canvas.addEventListener('mousemove', e => {
                 let pointer = pointers[0];
-                let posX = scaleByPixelRatio(e.clientX);
-                let posY = scaleByPixelRatio(e.clientY);
-                let color = pointer.color;
-                updatePointerMoveData(pointer, posX, posY, color);
+                if (pointer.down) {
+                    let posX = scaleByPixelRatio(e.offsetX);
+                    let posY = scaleByPixelRatio(e.offsetY);
+                    updatePointerMoveData(pointer, posX, posY, pointer.color);
+                }
+            });
+
+            window.addEventListener('mouseup', () => {
+                let pointer = pointers[0];
+                pointer.down = false;
             });
 
             // Touch event handlers
             canvas.addEventListener('touchstart', e => {
                 e.preventDefault();
-                let touches = e.targetTouches;
-                let pointer = pointers[0];
+                const touches = e.targetTouches;
                 for (let i = 0; i < touches.length; i++) {
+                    if (i >= pointers.length) {
+                        pointers.push(new pointers[0].constructor());
+                    }
+                    let pointer = pointers[i];
                     let posX = scaleByPixelRatio(touches[i].clientX);
                     let posY = scaleByPixelRatio(touches[i].clientY);
                     updatePointerDownData(pointer, touches[i].identifier, posX, posY);
@@ -1061,120 +1183,36 @@
 
             canvas.addEventListener('touchmove', e => {
                 e.preventDefault();
-                let touches = e.targetTouches;
-                let pointer = pointers[0];
+                const touches = e.targetTouches;
                 for (let i = 0; i < touches.length; i++) {
-                    updatePointerMoveData(
-                        pointer,
-                        scaleByPixelRatio(touches[i].clientX),
-                        scaleByPixelRatio(touches[i].clientY),
-                        pointer.color
-                    );
+                    let pointer = pointers[i];
+                    if (pointer.down) {
+                        let posX = scaleByPixelRatio(touches[i].clientX);
+                        let posY = scaleByPixelRatio(touches[i].clientY);
+                        updatePointerMoveData(pointer, posX, posY, pointer.color);
+                    }
                 }
             }, false);
 
             canvas.addEventListener('touchend', e => {
-                let touches = e.changedTouches;
-                let pointer = pointers[0];
+                const touches = e.changedTouches;
                 for (let i = 0; i < touches.length; i++) {
-                    pointer.down = false;
+                    const pointer = pointers.find(p => p.id === touches[i].identifier);
+                    if (pointer) {
+                        pointer.down = false;
+                    }
                 }
             });
 
+            // Window resize handler
+            window.addEventListener('resize', () => {
+                resizeCanvas(canvas);
+            });
+
+            // Create initial splats and start the animation loop
+            createInitialSplats();
             update();
         }
-
-        // Initialize the fluid simulation with mobile optimizations
-        window.addEventListener('load', () => {
-            const canvas = document.getElementById('fluid');
-            
-            // Detect if we're on mobile
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
-                           ('ontouchstart' in window) || 
-                           (navigator.maxTouchPoints > 0);
-            
-            // Mobile-optimized settings
-            const mobileConfig = {
-                SIM_RESOLUTION: isMobile ? 64 : 128,
-                DYE_RESOLUTION: isMobile ? 512 : 1440,
-                DENSITY_DISSIPATION: 3.5,
-                VELOCITY_DISSIPATION: 2,
-                PRESSURE: 0.1,
-                PRESSURE_ITERATIONS: isMobile ? 10 : 20,
-                CURL: 3,
-                SPLAT_RADIUS: isMobile ? 0.25 : 0.2,
-                SPLAT_FORCE: isMobile ? 8000 : 6000,
-                SHADING: !isMobile, // Disable shading on mobile for better performance
-                COLOR_UPDATE_SPEED: 10,
-                TRANSPARENT: true
-            };
-            
-            SplashCursor(canvas, mobileConfig);
-            
-            // Add touch feedback for mobile
-            if (isMobile) {
-                canvas.style.cursor = 'none';
-                
-                // Prevent zoom on double tap
-                let lastTouchEnd = 0;
-                canvas.addEventListener('touchend', function (event) {
-                    var now = (new Date()).getTime();
-                    if (now - lastTouchEnd <= 300) {
-                        event.preventDefault();
-                    }
-                    lastTouchEnd = now;
-                }, false);
-                
-                // Prevent pinch zoom
-                canvas.addEventListener('gesturestart', function (e) {
-                    e.preventDefault();
-                });
-                
-                canvas.addEventListener('gesturechange', function (e) {
-                    e.preventDefault();
-                });
-                
-                canvas.addEventListener('gestureend', function (e) {
-                    e.preventDefault();
-                });
-            }
-            
-            // Optimize for different pixel densities
-            const pixelRatio = window.devicePixelRatio || 1;
-            if (pixelRatio > 2 && isMobile) {
-                // Reduce resolution on high-DPI mobile devices for better performance
-                mobileConfig.SIM_RESOLUTION = 48;
-                mobileConfig.DYE_RESOLUTION = 256;
-            }
-            
-            // Add performance monitoring
-            let frameCount = 0;
-            let lastTime = performance.now();
-            
-            function checkPerformance() {
-                frameCount++;
-                const currentTime = performance.now();
-                
-                if (currentTime - lastTime >= 5000) { // Check every 5 seconds
-                    const fps = (frameCount * 1000) / (currentTime - lastTime);
-                    
-                    if (fps < 30 && isMobile) {
-                        // Further reduce quality if performance is poor
-                        console.log('Reducing quality for better performance');
-                        // You could implement dynamic quality reduction here
-                    }
-                    
-                    frameCount = 0;
-                    lastTime = currentTime;
-                }
-                
-                requestAnimationFrame(checkPerformance);
-            }
-            
-            if (isMobile) {
-                checkPerformance();
-            }
-        });
     </script>
 </body>
 </html>
